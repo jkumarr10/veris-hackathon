@@ -226,6 +226,7 @@ The worker supports 2 schemas:
 - Output (`ManagerDecision`):
   - `decision` (`deploy_crew | wait_and_monitor | alert_only`)
   - `reasoning`
+  - `gain_horizon_days` (fixed to 30)
   - `projected_loss_without_cleaning_usd`
   - `projected_gain_usd`
   - `clean_cost_usd`
@@ -249,11 +250,14 @@ The worker supports 2 schemas:
 
 ### Manager decision policy (validator / deterministic baseline)
 - `SOILING_ALERT_THRESHOLD_PCT = 12.0`
+- `DEPLOY_ROI_THRESHOLD = 0.9` (30-day gain horizon)
+- `ALERT_ROI_THRESHOLD = 0.75`
+- `RAIN_DEPLOY_ROI_THRESHOLD = 1.0`
 - Rules:
   - If `avg_soiling_loss_pct < 12.0` -> `wait_and_monitor`
-  - Else if `rain_in_next_7_days` and `roi_ratio < 1.2` -> `wait_and_monitor`
-  - Else if `roi_ratio >= 1.15` -> `deploy_crew`
-  - Else if `0.95 <= roi_ratio < 1.15` -> `alert_only`
+  - Else if `rain_in_next_7_days` and `roi_ratio < 1.0` -> `wait_and_monitor`
+  - Else if `roi_ratio >= 0.9` and `net_gain_usd >= 0` -> `deploy_crew`
+  - Else if `0.75 <= roi_ratio < 0.9` -> `alert_only`
   - Else -> `wait_and_monitor`
 
 ### Agentic loop behavior

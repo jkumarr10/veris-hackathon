@@ -179,8 +179,8 @@ export default function App() {
         <section className="panel form-panel">
           <h2>Configure Analysis</h2>
           <p className="help-line">
-            Lookahead days defines how many future days we project value recovery over. We cap it at 7
-            for robust weather + air-quality support.
+            Weather horizon uses lookahead days (max 7) for near-term forecast confidence. Gain horizon is
+            fixed at 30 days for economic recovery projection.
           </p>
 
           <form onSubmit={runAnalysis}>
@@ -294,14 +294,16 @@ export default function App() {
               <div className="metrics-grid">
                 <article>
                   <p className="metric-label">
-                    Loss if Not Cleaned ({result.environment.lookahead_days}d)
+                    Loss if Not Cleaned ({result.environment.lookahead_days}d Weather Horizon)
                   </p>
                   <p className="metric-value">
                     ${fmtNumber(result.manager_decision.projected_loss_without_cleaning_usd)}
                   </p>
                 </article>
                 <article>
-                  <p className="metric-label">Gain if Cleaned (30d)</p>
+                  <p className="metric-label">
+                    Gain if Cleaned ({result.manager_decision.gain_horizon_days}d Gain Horizon)
+                  </p>
                   <p className="metric-value">${fmtNumber(result.manager_decision.projected_gain_usd)}</p>
                 </article>
                 <article>
@@ -316,14 +318,18 @@ export default function App() {
 
               <div className="metrics-grid three">
                 <article>
-                  <p className="metric-label">Resolved Site</p>
-                  <p className="metric-note">{result.resolved_location.name}</p>
+                  <p className="metric-label">Weather Horizon</p>
+                  <p className="metric-note">{fmtNumber(result.environment.lookahead_days, 0)} days</p>
                 </article>
                 <article>
-                  <p className="metric-label">PM2.5 / PM10</p>
+                  <p className="metric-label">Gain Horizon</p>
                   <p className="metric-note">
-                    {fmtNumber(result.environment.pm25)} / {fmtNumber(result.environment.pm10)}
+                    {fmtNumber(result.manager_decision.gain_horizon_days, 0)} days
                   </p>
+                </article>
+                <article>
+                  <p className="metric-label">Resolved Site</p>
+                  <p className="metric-note">{result.resolved_location.name}</p>
                 </article>
                 <article>
                   <p className="metric-label">Rain (Next 7 Days)</p>
@@ -332,6 +338,12 @@ export default function App() {
               </div>
 
               <div className="metrics-grid three">
+                <article>
+                  <p className="metric-label">PM2.5 / PM10</p>
+                  <p className="metric-note">
+                    {fmtNumber(result.environment.pm25)} / {fmtNumber(result.environment.pm10)}
+                  </p>
+                </article>
                 <article>
                   <p className="metric-label">Rain (Past 7 Days)</p>
                   <p className="metric-note">{result.environment.rainy_days_prev_7_days} rainy days</p>

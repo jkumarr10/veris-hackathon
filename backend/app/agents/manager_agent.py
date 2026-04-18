@@ -13,6 +13,9 @@ from app.models import EnvironmentReport, ManagerDecision, YieldReport
 logger = logging.getLogger(__name__)
 SOILING_ALERT_THRESHOLD_PCT = 12.0
 GAIN_HORIZON_DAYS = 30
+DEPLOY_ROI_THRESHOLD = 0.9
+ALERT_ROI_THRESHOLD = 0.75
+RAIN_DEPLOY_ROI_THRESHOLD = 1.0
 ManagerEventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
@@ -71,6 +74,7 @@ class DecisionManagerAgent:
                 )
 
             candidate = await self._propose_decision(
+                environment=environment,
                 metrics=metrics,
                 feedback=feedback,
                 iteration=i,
@@ -133,6 +137,7 @@ class DecisionManagerAgent:
 
     async def _propose_decision(
         self,
+        environment: EnvironmentReport,
         metrics: dict[str, float | None],
         feedback: str,
         iteration: int,
@@ -144,9 +149,12 @@ class DecisionManagerAgent:
             "gain_horizon_days": metrics.get("gain_horizon_days"),
             "projected_loss_without_cleaning_usd": metrics.get("projected_loss_without_cleaning_usd"),
             "projected_gain_usd": metrics.get("projected_gain_usd"),
+            "net_gain_usd": metrics.get("net_gain_usd"),
             "clean_cost_usd": metrics.get("clean_cost_usd"),
             "roi_ratio": metrics.get("roi_ratio"),
             "avg_soiling_loss_pct": metrics.get("avg_soiling_loss_pct"),
+            "soiling_alert_threshold_pct": SOILING_ALERT_THRESHOLD_PCT,
+            "rain_in_next_7_days": environment.rain_in_next_7_days,
             "rain_penalty": metrics.get("rain_penalty"),
             "recent_rain_penalty": metrics.get("recent_rain_penalty"),
         }
@@ -166,6 +174,10 @@ class DecisionManagerAgent:
                 "- Use plain business language.\n"
                 "- Focus on economics using: loss if not cleaned over lookahead_days, "
                 "gain if cleaned over gain_horizon_days, and cleaning cost.\n"
+                "- Treat gain_horizon_days as the primary return window (30-day ROI).\n"
+                "- If 30-day gain is worth the cleaning spend (non-negative net gain and strong ROI), prefer deploy_crew.\n"
+                "- If economics are borderline, prefer alert_only.\n"
+                "- If economics are weak, prefer wait_and_monitor.\n"
                 "- Provide chain-of-thought details within the reasoning section and avoid break-even framing unless explicitly asked.\n"
                 "Output format requirement:\n"
                 "Return ONLY strict JSON with keys: decision, reasoning."
@@ -177,10 +189,13 @@ class DecisionManagerAgent:
         prompt = (
             f"Current phase: {phase}.\n"
             f"Metrics JSON: {json.dumps(llm_metrics)}\n"
-            "Business policy hints:\n"
-            "- high ROI typically deploy\n"
-            "- borderline ROI alert\n"
-            "- low ROI wait\n"
+            "Business policy rubric (follow this strictly):\n"
+            f"1) deploy_crew when roi_ratio >= {DEPLOY_ROI_THRESHOLD:.2f} AND net_gain_usd >= 0\n"
+            f"2) if rain_in_next_7_days is true, deploy_crew only when roi_ratio >= {RAIN_DEPLOY_ROI_THRESHOLD:.2f}\n"
+            f"3) alert_only when {ALERT_ROI_THRESHOLD:.2f} <= roi_ratio < {DEPLOY_ROI_THRESHOLD:.2f}\n"
+            f"4) wait_and_monitor when roi_ratio < {ALERT_ROI_THRESHOLD:.2f}\n"
+            "5) If avg_soiling_loss_pct is below threshold, prefer wait_and_monitor\n"
+            "6) Your reasoning must reference 30-day gain and net_gain_usd explicitly\n"
         )
         if feedback:
             prompt += f"\nFeedback from previous attempt: {feedback}\n"
@@ -226,6 +241,7 @@ class DecisionManagerAgent:
         return ManagerDecision(
             decision=candidate["decision"],
             reasoning=candidate["reasoning"],
+            gain_horizon_days=GAIN_HORIZON_DAYS,
             projected_loss_without_cleaning_usd=round(
                 float(metrics["projected_loss_without_cleaning_usd"] or 0.0), 2
             ),
@@ -259,6 +275,7 @@ class DecisionManagerAgent:
             * recent_rain_penalty
         )
         projected_loss_without_cleaning_usd = yield_report.estimated_daily_loss_usd * lookahead_days
+        net_gain_usd = projected_gain_usd - cleaning_cost_usd
         roi_ratio = (projected_gain_usd / cleaning_cost_usd) if cleaning_cost_usd > 0 else 0.0
 
         break_even_days = None
@@ -274,6 +291,7 @@ class DecisionManagerAgent:
             "recent_rain_penalty": float(recent_rain_penalty),
             "projected_loss_without_cleaning_usd": float(projected_loss_without_cleaning_usd),
             "projected_gain_usd": float(projected_gain_usd),
+            "net_gain_usd": float(net_gain_usd),
             "clean_cost_usd": float(cleaning_cost_usd),
             "roi_ratio": float(roi_ratio),
             "break_even_days": float(break_even_days) if break_even_days is not None else None,
@@ -287,6 +305,7 @@ class DecisionManagerAgent:
     ) -> ManagerDecision:
         roi_ratio = float(metrics["roi_ratio"] or 0.0)
         soiling_loss = float(metrics["avg_soiling_loss_pct"] or 0.0)
+        net_gain_usd = float(metrics["net_gain_usd"] or 0.0)
 
         if soiling_loss < SOILING_ALERT_THRESHOLD_PCT:
             decision = "wait_and_monitor"
@@ -294,22 +313,34 @@ class DecisionManagerAgent:
                 f"Soiling loss ({soiling_loss:.1f}%) is below threshold "
                 f"({SOILING_ALERT_THRESHOLD_PCT:.1f}%)."
             )
-        elif environment.rain_in_next_7_days and roi_ratio < 1.2:
+        elif environment.rain_in_next_7_days and roi_ratio < RAIN_DEPLOY_ROI_THRESHOLD:
             decision = "wait_and_monitor"
-            reasoning = "Rain is likely in the next 7 days and ROI is not strong enough yet."
-        elif roi_ratio >= 1.15:
+            reasoning = (
+                f"Rain is likely in the next 7 days and ROI ({roi_ratio:.2f}) is below "
+                f"the rainy-condition deploy threshold ({RAIN_DEPLOY_ROI_THRESHOLD:.2f})."
+            )
+        elif roi_ratio >= DEPLOY_ROI_THRESHOLD and net_gain_usd >= 0:
             decision = "deploy_crew"
-            reasoning = "Projected near-term energy recovery exceeds cleaning costs."
-        elif 0.95 <= roi_ratio < 1.15:
+            reasoning = (
+                f"30-day projected gain covers cleaning cost with positive net value "
+                f"(${net_gain_usd:.2f}) and ROI {roi_ratio:.2f}."
+            )
+        elif ALERT_ROI_THRESHOLD <= roi_ratio < DEPLOY_ROI_THRESHOLD:
             decision = "alert_only"
-            reasoning = "ROI is borderline; raise alert and re-evaluate after next data refresh."
+            reasoning = (
+                f"30-day ROI ({roi_ratio:.2f}) is borderline; raise an alert and re-check "
+                "after next data refresh."
+            )
         else:
             decision = "wait_and_monitor"
-            reasoning = "Projected gain does not justify cleaning cost at this time."
+            reasoning = (
+                f"30-day projected gain does not justify cleaning cost (net ${net_gain_usd:.2f})."
+            )
 
         return ManagerDecision(
             decision=decision,
             reasoning=reasoning,
+            gain_horizon_days=GAIN_HORIZON_DAYS,
             projected_loss_without_cleaning_usd=round(
                 float(metrics["projected_loss_without_cleaning_usd"] or 0.0), 2
             ),
@@ -331,14 +362,15 @@ class DecisionManagerAgent:
     ) -> tuple[bool, str, str]:
         roi_ratio = float(metrics["roi_ratio"] or 0.0)
         soiling_loss = float(metrics["avg_soiling_loss_pct"] or 0.0)
+        net_gain_usd = float(metrics["net_gain_usd"] or 0.0)
 
         if soiling_loss < SOILING_ALERT_THRESHOLD_PCT:
             expected = "wait_and_monitor"
-        elif environment.rain_in_next_7_days and roi_ratio < 1.2:
+        elif environment.rain_in_next_7_days and roi_ratio < RAIN_DEPLOY_ROI_THRESHOLD:
             expected = "wait_and_monitor"
-        elif roi_ratio >= 1.15:
+        elif roi_ratio >= DEPLOY_ROI_THRESHOLD and net_gain_usd >= 0:
             expected = "deploy_crew"
-        elif 0.95 <= roi_ratio < 1.15:
+        elif ALERT_ROI_THRESHOLD <= roi_ratio < DEPLOY_ROI_THRESHOLD:
             expected = "alert_only"
         else:
             expected = "wait_and_monitor"

@@ -35,6 +35,7 @@ class YieldReport(BaseModel):
 class ManagerDecision(BaseModel):
     decision: Literal["deploy_crew", "wait_and_monitor", "alert_only"]
     reasoning: str
+    gain_horizon_days: int
     projected_loss_without_cleaning_usd: float
     projected_gain_usd: float
     clean_cost_usd: float
