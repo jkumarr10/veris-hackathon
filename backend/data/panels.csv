@@ -1,0 +1,21 @@
+panel_id,zone,expected_kwh,actual_kwh
+P-001,Block A,36.4,33.8
+P-002,Block B,38.1,30.2
+P-003,Block C,41.0,28.5
+P-004,Block D,34.2,30.6
+P-005,Block A,37.9,34.9
+P-006,Block B,39.5,32.0
+P-007,Block C,42.3,30.4
+P-008,Block D,33.6,29.1
+P-009,Block A,35.8,32.1
+P-010,Block B,40.2,32.4
+P-011,Block C,43.1,30.8
+P-012,Block D,32.9,28.8
+P-013,Block A,36.7,33.0
+P-014,Block B,39.8,31.7
+P-015,Block C,41.7,29.6
+P-016,Block D,34.5,30.2
+P-017,Block A,37.1,33.9
+P-018,Block B,38.9,31.4
+P-019,Block C,42.0,29.4
+P-020,Block D,33.8,29.7
